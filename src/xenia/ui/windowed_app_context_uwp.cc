@@ -12,6 +12,7 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Core.h>
 
+#include "xenia/base/logging.h"
 #include "xenia/ui/window_uwp.h"
 
 namespace xe {
@@ -48,6 +49,10 @@ void UWPWindowedAppContext::RunMainLoop() {
     }
     if (paint_requested_.exchange(false, std::memory_order_relaxed) &&
         window_) {
+      if (!painted_) {
+        XELOGI("UWP: First paint");
+        painted_ = true;
+      }
       window_->PaintFromMainLoop();
     }
     // CoreWindow events can't wake this wait, so keep the timeout short to

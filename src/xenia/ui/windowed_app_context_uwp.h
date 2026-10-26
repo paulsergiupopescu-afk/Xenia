@@ -54,6 +54,7 @@ class UWPWindowedAppContext final : public WindowedAppContext {
   UWPWindow* window_ = nullptr;
   HANDLE wake_event_;
   std::atomic<bool> paint_requested_ = false;
+  bool painted_ = false;
 };
 
 }  // namespace ui

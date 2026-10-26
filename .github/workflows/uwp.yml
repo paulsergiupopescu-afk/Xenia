@@ -103,3 +103,11 @@ jobs:
           name: XeniaEdge-UWP-x64
           path: artifacts\XeniaEdge-UWP
           if-no-files-found: error
+
+      # For symbolizing dumps taken on the console with Device Portal.
+      - name: Upload symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: XeniaEdge-UWP-x64-symbols
+          path: build\bin\Windows\Release\xenia_edge_uwp.pdb
+          if-no-files-found: warn

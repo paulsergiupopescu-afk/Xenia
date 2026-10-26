@@ -414,6 +414,7 @@ void UWPEmulatorApp::ApplyDisplayConfigForCvars() {
 
 void UWPEmulatorApp::ShowGameList() {
   if (!game_list_dialog_) {
+    XELOGI("UWP: Showing the game list");
     game_list_dialog_ = new GameListDialog(imgui_drawer_.get(), *this);
   }
 }
