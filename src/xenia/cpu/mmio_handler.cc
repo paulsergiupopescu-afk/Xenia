@@ -78,6 +78,19 @@ bool MMIOHandler::RegisterRange(uint32_t virtual_address, uint32_t mask,
                                 uint32_t size, void* context,
                                 MMIOReadCallback read_callback,
                                 MMIOWriteCallback write_callback) {
+  // Subsystems recreated without recreating the memory (like the graphics and
+  // audio systems for a launch in the UWP app, which sets them up for its UI
+  // first) register their range again. The lookups take the first match, so
+  // replace the old registration, which points to the destroyed subsystem.
+  for (auto& range : mapped_ranges_) {
+    if (range.address == virtual_address && range.mask == mask) {
+      range.size = size;
+      range.callback_context = context;
+      range.read = read_callback;
+      range.write = write_callback;
+      return true;
+    }
+  }
   mapped_ranges_.push_back({
       virtual_address,
       mask,

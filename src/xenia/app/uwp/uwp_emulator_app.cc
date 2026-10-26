@@ -22,6 +22,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_amd64.h"
 #include "xenia/base/platform_uwp.h"
+#include "xenia/base/utf8.h"
 #include "xenia/config.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
@@ -462,12 +463,32 @@ void UWPEmulatorApp::RemoveGameFolder(size_t index) {
   }
 }
 
+// The default.xex of an extracted disc in the folder, in any case, or an empty
+// path.
+static std::filesystem::path FindDefaultXex(const std::filesystem::path& dir) {
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (xe::utf8::lower_ascii(xe::path_to_utf8(entry.path().filename())) ==
+            "default.xex" &&
+        entry.is_regular_file(ec)) {
+      return entry.path();
+    }
+  }
+  return {};
+}
+
 void UWPEmulatorApp::RefreshGames() {
   games_.clear();
   std::vector<std::filesystem::path> roots = game_folders_;
   // Games copied over with the Device Portal file explorer.
   roots.push_back(xe::uwp::GetLocalStateFolder() / "games");
   for (const auto& root : roots) {
+    // An extracted disc added as a game folder itself.
+    std::filesystem::path root_default_xex = FindDefaultXex(root);
+    if (!root_default_xex.empty()) {
+      games_.push_back({xe::path_to_utf8(root.filename()), root_default_xex});
+      continue;
+    }
     std::error_code ec;
     auto it = std::filesystem::recursive_directory_iterator(
         root, std::filesystem::directory_options::skip_permission_denied, ec);
@@ -480,6 +501,17 @@ void UWPEmulatorApp::RefreshGames() {
         break;
       }
       const std::filesystem::directory_entry& entry = *it;
+      if (entry.is_directory(ec)) {
+        // An extracted disc is one game named after its folder, and the other
+        // executables in it (like the $SystemUpdate ones) aren't games.
+        std::filesystem::path default_xex = FindDefaultXex(entry.path());
+        if (!default_xex.empty()) {
+          games_.push_back(
+              {xe::path_to_utf8(entry.path().filename()), default_xex});
+          it.disable_recursion_pending();
+        }
+        continue;
+      }
       if (!entry.is_regular_file(ec)) {
         continue;
       }
@@ -488,11 +520,7 @@ void UWPEmulatorApp::RefreshGames() {
       switch (emulator_->GetFileSignature(path)) {
         case Emulator::FileSignatureType::XEX1:
         case Emulator::FileSignatureType::XEX2:
-          // Extracted discs are named after their folder.
-          name = xe::path_to_utf8(path.has_parent_path() &&
-                                          path.stem() == "default"
-                                      ? path.parent_path().filename()
-                                      : path.stem());
+          name = xe::path_to_utf8(path.stem());
           break;
         case Emulator::FileSignatureType::CON:
         case Emulator::FileSignatureType::LIVE:
