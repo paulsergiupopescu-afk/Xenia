@@ -122,6 +122,8 @@ bool PipelineCache::Initialize() {
   const ui::d3d12::D3D12Provider& provider =
       command_processor_.GetD3D12Provider();
 
+  SpirvToDxilCompiler::SetHighestShaderModel(provider.GetHighestShaderModel());
+
   // DXIL shader compilation is mandatory: guest and system shaders are all
   // DXIL, so the D3D12 backend can't run without DXC.
   dxc_shader_compiler_ = std::make_unique<DxcCompiler>(provider);

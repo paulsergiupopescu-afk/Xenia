@@ -467,6 +467,11 @@ class D3D12CommandProcessor final : public CommandProcessor {
     // cache is in its pixel shader interlock path. Unreferenced otherwise.
     kRootParameter_Mesa_Edram,          // u1 UAV, space0.
     kRootParameter_Mesa_ZpdRovCounter,  // u2 UAV, space0.
+    // Below Shader Model 6.6, unbounded ranges over the whole bindless view and
+    // sampler heaps, which the DXIL accesses instead of directly indexing the
+    // heaps (SpirvToDxilCompiler::GetHeapEmulation*Ranges).
+    kRootParameter_Mesa_HeapEmulationTextures,
+    kRootParameter_Mesa_HeapEmulationSamplers,
 
     kRootParameter_Mesa_Count,
   };

@@ -20,6 +20,7 @@
 #include "xenia/base/profiling.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #include "xenia/gpu/d3d12/d3d12_zpd_query_pool.h"
+#include "xenia/gpu/d3d12/spirv_to_dxil_compiler.h"
 #include "xenia/gpu/draw_util.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/packet_disassembler.h"
@@ -1067,16 +1068,47 @@ bool D3D12CommandProcessor::SetupContext() {
       parameter.DescriptorTable.pDescriptorRanges = &mesa_zpd_counter_range;
       parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
+    // The pipeline cache, which translates the shaders, is created later.
+    SpirvToDxilCompiler::SetHighestShaderModel(
+        GetD3D12Provider().GetHighestShaderModel());
+    std::vector<D3D12_DESCRIPTOR_RANGE> mesa_heap_emulation_texture_ranges =
+        SpirvToDxilCompiler::GetHeapEmulationTextureRanges();
+    std::vector<D3D12_DESCRIPTOR_RANGE> mesa_heap_emulation_sampler_ranges =
+        SpirvToDxilCompiler::GetHeapEmulationSamplerRanges();
+    {
+      auto& parameter =
+          root_parameters_mesa[kRootParameter_Mesa_HeapEmulationTextures];
+      parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+      parameter.DescriptorTable.NumDescriptorRanges =
+          UINT(mesa_heap_emulation_texture_ranges.size());
+      parameter.DescriptorTable.pDescriptorRanges =
+          mesa_heap_emulation_texture_ranges.data();
+      parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    }
+    {
+      auto& parameter =
+          root_parameters_mesa[kRootParameter_Mesa_HeapEmulationSamplers];
+      parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+      parameter.DescriptorTable.NumDescriptorRanges =
+          UINT(mesa_heap_emulation_sampler_ranges.size());
+      parameter.DescriptorTable.pDescriptorRanges =
+          mesa_heap_emulation_sampler_ranges.data();
+      parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    }
     D3D12_ROOT_SIGNATURE_DESC root_signature_mesa_desc = {};
     root_signature_mesa_desc.NumParameters = kRootParameter_Mesa_Count;
     root_signature_mesa_desc.pParameters = root_parameters_mesa;
+    root_signature_mesa_desc.Flags =
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     // The bindless lowering accesses textures via ResourceDescriptorHeap and
     // samplers via SamplerDescriptorHeap, so both heaps must be directly
-    // indexable from the shader.
-    root_signature_mesa_desc.Flags =
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
-        D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
-        D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+    // indexable from the shader. Below Shader Model 6.6, where these flags
+    // don't exist, the heap emulation tables are used instead.
+    if (!SpirvToDxilCompiler::IsHeapEmulationUsed()) {
+      root_signature_mesa_desc.Flags |=
+          D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
+          D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+    }
     root_signature_mesa_ = ui::d3d12::util::CreateRootSignature(
         GetD3D12Provider(), root_signature_mesa_desc);
     if (!root_signature_mesa_) {
@@ -4681,6 +4713,16 @@ bool D3D12CommandProcessor::UpdateBindingsMesa(
       kRootParameter_Mesa_VertexSamplerRange, sampler_bindless_heap_gpu_start_);
   deferred_command_list_.D3DSetGraphicsRootDescriptorTable(
       kRootParameter_Mesa_PixelSamplerRange, sampler_bindless_heap_gpu_start_);
+  // The heap indices from the index buffers are absolute, like with
+  // ResourceDescriptorHeap / SamplerDescriptorHeap.
+  if (SpirvToDxilCompiler::IsHeapEmulationUsed()) {
+    deferred_command_list_.D3DSetGraphicsRootDescriptorTable(
+        kRootParameter_Mesa_HeapEmulationTextures,
+        view_bindless_heap_gpu_start_);
+    deferred_command_list_.D3DSetGraphicsRootDescriptorTable(
+        kRootParameter_Mesa_HeapEmulationSamplers,
+        sampler_bindless_heap_gpu_start_);
+  }
 
   return true;
 }

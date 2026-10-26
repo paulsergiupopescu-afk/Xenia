@@ -10,6 +10,8 @@
 #include "xenia/gpu/d3d12/spirv_to_dxil_compiler.h"
 
 #include <algorithm>
+#include <atomic>
+#include <climits>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -28,6 +30,9 @@ namespace gpu {
 namespace d3d12 {
 
 namespace {
+// D3D_SHADER_MODEL value, see SetHighestShaderModel.
+std::atomic<uint32_t> highest_shader_model{D3D_SHADER_MODEL_6_6};
+
 // The SPIR-V to DXIL conversion itself is thread safe: Mesa's glsl_type cache
 // (its only shared global) locks internally, so conversions run in parallel
 // across the main thread and the pipeline creation threads. Only the DXIL.dll
@@ -138,8 +143,16 @@ dxil_spirv_runtime_conf MakeRuntimeConf(bool lower_to_bindless,
   conf.yz_flip.mode = DXIL_SPIRV_YZ_FLIP_NONE;
   // Strict IEEE float math, matching the DXC -Gis the HLSL path used.
   conf.disable_math_refactoring = true;
-  conf.shader_model_max = SHADER_MODEL_6_6;
+  // D3D_SHADER_MODEL_6_x is 0x6x, SHADER_MODEL_6_x is SHADER_MODEL_6_0 + x.
+  uint32_t shader_model =
+      std::clamp(highest_shader_model.load(std::memory_order_relaxed),
+                 uint32_t(D3D_SHADER_MODEL_6_0), uint32_t(D3D_SHADER_MODEL_6_6));
+  conf.shader_model_max = dxil_shader_model(
+      SHADER_MODEL_6_0 + (shader_model - uint32_t(D3D_SHADER_MODEL_6_0)));
   conf.lower_to_bindless = lower_to_bindless;
+  // Used only below Shader Model 6.6.
+  conf.heap_emulation_register_space_base =
+      SpirvToDxilCompiler::kHeapEmulationRegisterSpaceBase;
   // SpirvShaderTranslator::kDescriptorSetCount.
   conf.bindless_descriptor_set_count = 4;
   // Independently translated stages (the single-stage Translate path) must keep
@@ -229,6 +242,52 @@ bool AcquireValidatorVersion(enum dxil_validator_version* out_version) {
 }  // namespace
 
 uint64_t SpirvToDxilCompiler::version() { return spirv_to_dxil_get_version(); }
+
+void SpirvToDxilCompiler::SetHighestShaderModel(uint32_t d3d_shader_model) {
+  highest_shader_model.store(d3d_shader_model, std::memory_order_relaxed);
+}
+
+bool SpirvToDxilCompiler::IsHeapEmulationUsed() {
+  return highest_shader_model.load(std::memory_order_relaxed) <
+         D3D_SHADER_MODEL_6_6;
+}
+
+std::vector<D3D12_DESCRIPTOR_RANGE>
+SpirvToDxilCompiler::GetHeapEmulationTextureRanges() {
+  // dxil_resource_kind texture kinds (Texture1D to TextureCubeArray) and the
+  // dxil_component_type of float, int and uint textures, see dxil_enums.h.
+  static constexpr uint32_t kTextureKinds[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  static constexpr uint32_t kComponentTypes[] = {9, 4, 5};
+  std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
+  for (uint32_t kind : kTextureKinds) {
+    for (uint32_t component_type : kComponentTypes) {
+      D3D12_DESCRIPTOR_RANGE& range = ranges.emplace_back();
+      range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+      range.NumDescriptors = UINT_MAX;
+      range.BaseShaderRegister = 0;
+      range.RegisterSpace = dxil_spirv_heap_emulation_srv_space(
+          kHeapEmulationRegisterSpaceBase, kind, component_type);
+      // All alias the whole heap.
+      range.OffsetInDescriptorsFromTableStart = 0;
+    }
+  }
+  return ranges;
+}
+
+std::vector<D3D12_DESCRIPTOR_RANGE>
+SpirvToDxilCompiler::GetHeapEmulationSamplerRanges() {
+  std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
+  for (bool comparison : {false, true}) {
+    D3D12_DESCRIPTOR_RANGE& range = ranges.emplace_back();
+    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+    range.NumDescriptors = UINT_MAX;
+    range.BaseShaderRegister = 0;
+    range.RegisterSpace = dxil_spirv_heap_emulation_sampler_space(
+        kHeapEmulationRegisterSpaceBase, comparison);
+    range.OffsetInDescriptorsFromTableStart = 0;
+  }
+  return ranges;
+}
 
 std::vector<uint8_t> SpirvToDxilCompiler::Translate(const uint32_t* spirv_words,
                                                     size_t spirv_word_count,

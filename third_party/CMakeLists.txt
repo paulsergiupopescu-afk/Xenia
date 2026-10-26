@@ -1317,6 +1317,33 @@ if(WIN32)
       "spirv_to_dxil. Run: git submodule update --init third_party/mesa "
       "(or set XENIA_MESA_SOURCE_DIR to your Mesa checkout).")
   endif()
+  # Changes not in the Mesa fork yet, applied once to the submodule's working
+  # tree (the submodule is ignore = dirty) at configure time.
+  find_package(Git REQUIRED)
+  file(GLOB _xe_mesa_patches
+      "${CMAKE_CURRENT_SOURCE_DIR}/mesa-patches/*.patch")
+  list(SORT _xe_mesa_patches)
+  foreach(_xe_mesa_patch IN LISTS _xe_mesa_patches)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" apply --reverse --check --ignore-whitespace
+              "${_xe_mesa_patch}"
+      WORKING_DIRECTORY "${_xe_mesa_dir}"
+      RESULT_VARIABLE _xe_mesa_patch_applied
+      OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _xe_mesa_patch_applied EQUAL 0)
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace
+                "${_xe_mesa_patch}"
+        WORKING_DIRECTORY "${_xe_mesa_dir}"
+        RESULT_VARIABLE _xe_mesa_patch_result)
+      if(NOT _xe_mesa_patch_result EQUAL 0)
+        message(FATAL_ERROR
+          "Failed to apply ${_xe_mesa_patch} to ${_xe_mesa_dir}")
+      endif()
+      message(STATUS "Applied ${_xe_mesa_patch}")
+    endif()
+  endforeach()
+
   find_program(XE_MESON_EXECUTABLE meson)
   find_program(XE_NINJA_EXECUTABLE ninja)
   if(NOT XE_MESON_EXECUTABLE OR NOT XE_NINJA_EXECUTABLE)

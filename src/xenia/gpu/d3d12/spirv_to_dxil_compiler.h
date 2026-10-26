@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "xenia/gpu/xenos.h"
+#include "xenia/ui/d3d12/d3d12_api.h"
 
 namespace xe {
 namespace gpu {
@@ -30,6 +31,21 @@ class SpirvToDxilCompiler {
  public:
   // Mesa git revision of the linked library.
   static uint64_t version();
+
+  // Highest shader model (a D3D_SHADER_MODEL value) the DXIL may target, the
+  // device's one capped at 6.6. Must be set before translating anything.
+  static void SetHighestShaderModel(uint32_t d3d_shader_model);
+
+  // Below Shader Model 6.6 (UWP on the Xbox Series X|S has 6.4), there's no
+  // dynamic descriptor heap indexing, so the bindless lowering accesses the
+  // heaps through unbounded descriptor ranges instead, one per resource kind
+  // and component type, in register spaces from this base. GetHeapEmulation*
+  // return descriptor ranges covering all of them, for descriptor tables
+  // pointing to the start of the view and the sampler heaps.
+  static constexpr uint32_t kHeapEmulationRegisterSpaceBase = 64;
+  static bool IsHeapEmulationUsed();
+  static std::vector<D3D12_DESCRIPTOR_RANGE> GetHeapEmulationTextureRanges();
+  static std::vector<D3D12_DESCRIPTOR_RANGE> GetHeapEmulationSamplerRanges();
 
   // Pipeline stage of the SPIR-V module. Covers the guest vertex/pixel shaders
   // and the host primitive-expansion geometry and tessellation shaders.

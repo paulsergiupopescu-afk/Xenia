@@ -12,3 +12,6 @@ src/**/shaders/bytecode/** linguist-generated=true
 # Preserve CRLF for generated shader headers
 src/xenia/gpu/shaders/bytecode/d3d12_5_1/*.h text eol=crlf
 src/**/testing/** linguist-detectable=false
+
+# Applied with git apply, keep them byte for byte.
+*.patch     -text
