@@ -176,10 +176,13 @@ void ExceptionHandler::Uninstall(Handler fn, void* data) {
       RemoveVectoredExceptionHandler(veh_handle_);
       veh_handle_ = nullptr;
     }
+#if !XE_PLATFORM_WINUWP
+    // Not available to app containers, and never added anyway.
     if (vch_handle_) {
       RemoveVectoredContinueHandler(vch_handle_);
       vch_handle_ = nullptr;
     }
+#endif  // !XE_PLATFORM_WINUWP
   }
 }
 

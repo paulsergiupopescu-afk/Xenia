@@ -28,7 +28,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb/stb_image.h"
 
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINUWP
 #include <ShlObj_core.h>
 #endif
 
@@ -387,7 +387,9 @@ bool ImGuiDrawer::LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config,
 
 bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
                                   float font_size) {
-#if XE_PLATFORM_WIN32
+// SHGetKnownFolderPath isn't available to app containers, and the Xbox has
+// few system fonts anyway, so UWP uses the embedded font.
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINUWP
   PWSTR fonts_dir;
   HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
   if (FAILED(result)) {
@@ -470,7 +472,7 @@ bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
 }
 
 bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINUWP
   PWSTR fonts_dir;
   HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
   if (FAILED(result)) {

@@ -466,6 +466,15 @@ add_library(imgui STATIC
   imgui/imgui_widgets.cpp
 )
 target_include_directories(imgui PUBLIC imgui PRIVATE stb)
+if(XENIA_UWP)
+  # imgui only detects UWP from WINAPI_FAMILY, but everything is compiled
+  # against the desktop headers, so disable what it would disable itself.
+  target_compile_definitions(imgui PRIVATE
+    IMGUI_DISABLE_WIN32_DEFAULT_CLIPBOARD_FUNCTIONS
+    IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS
+    IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS
+  )
+endif()
 
 # ==============================================================================
 # miniaudio (header-only)

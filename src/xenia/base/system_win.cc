@@ -12,8 +12,45 @@
 #include "xenia/base/string.h"
 #include "xenia/base/system.h"
 
+#if XE_PLATFORM_WINUWP
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.System.h>
+
+#include "xenia/base/filesystem.h"
+#include "xenia/base/logging.h"
+#endif  // XE_PLATFORM_WINUWP
+
 namespace xe {
 
+#if XE_PLATFORM_WINUWP
+// ShellExecute and MessageBox aren't available to app containers.
+
+void LaunchWebBrowser(const std::string_view url) {
+  try {
+    winrt::Windows::System::Launcher::LaunchUriAsync(
+        winrt::Windows::Foundation::Uri(winrt::to_hstring(url)));
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("Failed to open {}: {}", url, winrt::to_string(e.message()));
+  }
+}
+
+void LaunchFileExplorer(const std::filesystem::path& url) {
+  try {
+    winrt::Windows::System::Launcher::LaunchFolderPathAsync(url.wstring());
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("Failed to open {}: {}", xe::path_to_utf8(url),
+           winrt::to_string(e.message()));
+  }
+}
+
+void ShowSimpleMessageBox(SimpleMessageBoxType type,
+                          const std::string_view message) {
+  // A MessageDialog is asynchronous and needs the UI thread, while the callers
+  // (fatal errors, invalid command lines) exit right after this returns, so
+  // the message only goes to the log.
+  XELOGE("{}", message);
+}
+#else
 void LaunchWebBrowser(const std::string_view url) {
   auto wide_url = xe::to_utf16(url);
   ShellExecuteW(nullptr, L"open", reinterpret_cast<LPCWSTR>(wide_url.c_str()),
@@ -48,6 +85,7 @@ void ShowSimpleMessageBox(SimpleMessageBoxType type,
   MessageBoxW(nullptr, reinterpret_cast<LPCWSTR>(wide_message.c_str()), title,
               type_flags);
 }
+#endif  // XE_PLATFORM_WINUWP
 
 static std::map<const uint32_t, DWORD> xeniaToWindowsPriorityClassMapping = {
     {0, NORMAL_PRIORITY_CLASS},

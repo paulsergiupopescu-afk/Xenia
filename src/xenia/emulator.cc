@@ -158,7 +158,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
     }
   }
 
-#if XE_PLATFORM_WIN32 == 1
+#if XE_PLATFORM_WIN32 == 1 && !XE_PLATFORM_WINUWP
   // Show a disclaimer that links to the quickstart
   // guide the first time they ever open the emulator
   uint64_t persistent_flags = GetPersistentEmulatorFlags();
