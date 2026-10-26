@@ -34,6 +34,12 @@
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/spirv_shader_translator.h"
 
+DEFINE_bool(d3d12_heap_emulation_bounded, true,
+            "Below Shader Model 6.6, declare the descriptor ranges emulating "
+            "heap indexing with the sizes of the heaps rather than as "
+            "unbounded. The Xbox driver stops in pipeline creation with 29 "
+            "overlapping unbounded ranges.",
+            "D3D12");
 DEFINE_bool(d3d12_bindless, true,
             "Use bindless resources where available - may improve performance, "
             "but may make debugging more complicated.",
@@ -1071,6 +1077,12 @@ bool D3D12CommandProcessor::SetupContext() {
     // The pipeline cache, which translates the shaders, is created later.
     SpirvToDxilCompiler::SetHighestShaderModel(
         GetD3D12Provider().GetHighestShaderModel());
+    if (cvars::d3d12_heap_emulation_bounded) {
+      SpirvToDxilCompiler::SetHeapEmulationSizes(kViewBindlessHeapSize,
+                                                 kSamplerHeapSize);
+    } else {
+      SpirvToDxilCompiler::SetHeapEmulationSizes(0, 0);
+    }
     std::vector<D3D12_DESCRIPTOR_RANGE> mesa_heap_emulation_texture_ranges =
         SpirvToDxilCompiler::GetHeapEmulationTextureRanges();
     std::vector<D3D12_DESCRIPTOR_RANGE> mesa_heap_emulation_sampler_ranges =

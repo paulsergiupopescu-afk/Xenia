@@ -32,6 +32,9 @@ namespace d3d12 {
 namespace {
 // D3D_SHADER_MODEL value, see SetHighestShaderModel.
 std::atomic<uint32_t> highest_shader_model{D3D_SHADER_MODEL_6_6};
+// See SetHeapEmulationSizes, 0 for unbounded.
+std::atomic<uint32_t> heap_emulation_srv_count{0};
+std::atomic<uint32_t> heap_emulation_sampler_count{0};
 
 // The SPIR-V to DXIL conversion itself is thread safe: Mesa's glsl_type cache
 // (its only shared global) locks internally, so conversions run in parallel
@@ -153,6 +156,10 @@ dxil_spirv_runtime_conf MakeRuntimeConf(bool lower_to_bindless,
   // Used only below Shader Model 6.6.
   conf.heap_emulation_register_space_base =
       SpirvToDxilCompiler::kHeapEmulationRegisterSpaceBase;
+  conf.heap_emulation_srv_count =
+      heap_emulation_srv_count.load(std::memory_order_relaxed);
+  conf.heap_emulation_sampler_count =
+      heap_emulation_sampler_count.load(std::memory_order_relaxed);
   // SpirvShaderTranslator::kDescriptorSetCount.
   conf.bindless_descriptor_set_count = 4;
   // Independently translated stages (the single-stage Translate path) must keep
@@ -247,6 +254,12 @@ void SpirvToDxilCompiler::SetHighestShaderModel(uint32_t d3d_shader_model) {
   highest_shader_model.store(d3d_shader_model, std::memory_order_relaxed);
 }
 
+void SpirvToDxilCompiler::SetHeapEmulationSizes(uint32_t srv_count,
+                                                uint32_t sampler_count) {
+  heap_emulation_srv_count.store(srv_count, std::memory_order_relaxed);
+  heap_emulation_sampler_count.store(sampler_count, std::memory_order_relaxed);
+}
+
 bool SpirvToDxilCompiler::IsHeapEmulationUsed() {
   return highest_shader_model.load(std::memory_order_relaxed) <
          D3D_SHADER_MODEL_6_6;
@@ -263,7 +276,9 @@ SpirvToDxilCompiler::GetHeapEmulationTextureRanges() {
     for (uint32_t component_type : kComponentTypes) {
       D3D12_DESCRIPTOR_RANGE& range = ranges.emplace_back();
       range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-      range.NumDescriptors = UINT_MAX;
+      uint32_t srv_count =
+          heap_emulation_srv_count.load(std::memory_order_relaxed);
+      range.NumDescriptors = srv_count ? srv_count : UINT_MAX;
       range.BaseShaderRegister = 0;
       range.RegisterSpace = dxil_spirv_heap_emulation_srv_space(
           kHeapEmulationRegisterSpaceBase, kind, component_type);
@@ -280,7 +295,9 @@ SpirvToDxilCompiler::GetHeapEmulationSamplerRanges() {
   for (bool comparison : {false, true}) {
     D3D12_DESCRIPTOR_RANGE& range = ranges.emplace_back();
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
-    range.NumDescriptors = UINT_MAX;
+    uint32_t sampler_count =
+        heap_emulation_sampler_count.load(std::memory_order_relaxed);
+    range.NumDescriptors = sampler_count ? sampler_count : UINT_MAX;
     range.BaseShaderRegister = 0;
     range.RegisterSpace = dxil_spirv_heap_emulation_sampler_space(
         kHeapEmulationRegisterSpaceBase, comparison);

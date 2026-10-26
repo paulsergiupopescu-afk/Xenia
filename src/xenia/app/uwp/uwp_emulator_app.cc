@@ -49,6 +49,11 @@ DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
             "Storage");
 
+DEFINE_path(uwp_autolaunch, "",
+            "Title to launch when the app starts without a protocol "
+            "activation, so it can be tested remotely through the Device "
+            "Portal (which can start the app but not press buttons).",
+            "UWP");
 DEFINE_string(uwp_game_folders, "",
               "Folders scanned for games by the UWP game list, separated by "
               "semicolons.",
@@ -319,6 +324,10 @@ void UWPEmulatorApp::EmulatorThread() {
   }
   app_context().CallInUIThreadSynchronous([this]() {
     SetupGraphicsSystemPresenterPainting();
+    if (launch_path_.empty() && !cvars::uwp_autolaunch.empty()) {
+      launch_path_ = cvars::uwp_autolaunch;
+      XELOGI("UWP: Autolaunching {}", xe::path_to_utf8(launch_path_));
+    }
     if (!launch_path_.empty()) {
       LaunchGame(launch_path_);
     } else {

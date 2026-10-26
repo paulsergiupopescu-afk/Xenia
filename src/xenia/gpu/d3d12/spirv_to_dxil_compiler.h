@@ -44,6 +44,10 @@ class SpirvToDxilCompiler {
   // pointing to the start of the view and the sampler heaps.
   static constexpr uint32_t kHeapEmulationRegisterSpaceBase = 64;
   static bool IsHeapEmulationUsed();
+  // Sizes of the heap emulation ranges, the sizes of the heaps, or 0 for
+  // unbounded ranges. Must be set before translating anything and before
+  // GetHeapEmulation*.
+  static void SetHeapEmulationSizes(uint32_t srv_count, uint32_t sampler_count);
   static std::vector<D3D12_DESCRIPTOR_RANGE> GetHeapEmulationTextureRanges();
   static std::vector<D3D12_DESCRIPTOR_RANGE> GetHeapEmulationSamplerRanges();
 

@@ -1,5 +1,5 @@
 diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
-index 202d622..4b5ca9c 100644
+index 202d622..5b44e16 100644
 --- a/src/microsoft/compiler/nir_to_dxil.c
 +++ b/src/microsoft/compiler/nir_to_dxil.c
 @@ -583,6 +583,11 @@ struct ntd_context {
@@ -14,7 +14,7 @@ index 202d622..4b5ca9c 100644
     struct util_dynarray cbv_metadata_nodes;
     const struct dxil_value *cbv_handles[MAX_CBVS];
  
-@@ -3497,6 +3502,187 @@ get_resource_handle(struct ntd_context *ctx, nir_src *src, enum dxil_resource_cl
+@@ -3497,6 +3502,192 @@ get_resource_handle(struct ntd_context *ctx, nir_src *src, enum dxil_resource_cl
     return handle;
  }
  
@@ -141,17 +141,22 @@ index 202d622..4b5ca9c 100644
 +emit_heap_emulation_ranges(struct ntd_context *ctx,
 +                           enum dxil_resource_class res_class)
 +{
++   /* 0 means unbounded. */
++   unsigned count = res_class == DXIL_RESOURCE_CLASS_SAMPLER
++                       ? ctx->opts->heap_emulation_sampler_count
++                       : ctx->opts->heap_emulation_srv_count;
++   unsigned layout_size = count ? count : UINT_MAX;
 +   util_dynarray_foreach(&ctx->heap_ranges, struct heap_range, range) {
 +      if (range->res_class != res_class)
 +         continue;
 +      if (res_class == DXIL_RESOURCE_CLASS_SAMPLER) {
 +         unsigned id = util_dynarray_num_elements(&ctx->sampler_metadata_nodes,
 +                                                  const struct dxil_mdnode *);
-+         resource_array_layout layout = {id, 0, UINT_MAX, range->space};
++         resource_array_layout layout = {id, 0, layout_size, range->space};
 +         const struct dxil_type *int32_type = dxil_module_get_int_type(&ctx->mod, 32);
 +         const struct dxil_type *sampler_type =
 +            dxil_module_get_struct_type(&ctx->mod, "struct.SamplerState", &int32_type, 1);
-+         sampler_type = dxil_module_get_array_type(&ctx->mod, sampler_type, 0);
++         sampler_type = dxil_module_get_array_type(&ctx->mod, sampler_type, count);
 +         const struct dxil_mdnode *fields[8];
 +         fill_resource_metadata(&ctx->mod, fields, sampler_type, "heap_samplers", &layout);
 +         fields[6] = dxil_get_metadata_int32(&ctx->mod, range->kind); // sampler kind
@@ -167,11 +172,11 @@ index 202d622..4b5ca9c 100644
 +         assert(res_class == DXIL_RESOURCE_CLASS_SRV);
 +         unsigned id = util_dynarray_num_elements(&ctx->srv_metadata_nodes,
 +                                                  const struct dxil_mdnode *);
-+         resource_array_layout layout = {id, 0, UINT_MAX, range->space};
++         resource_array_layout layout = {id, 0, layout_size, range->space};
 +         const struct dxil_type *res_type =
 +            dxil_module_get_res_type(&ctx->mod, range->kind, range->comp_type,
 +                                     4, false /* readwrite */);
-+         res_type = dxil_module_get_array_type(&ctx->mod, res_type, 0);
++         res_type = dxil_module_get_array_type(&ctx->mod, res_type, count);
 +         const struct dxil_mdnode *srv_meta =
 +            emit_srv_metadata(&ctx->mod, res_type, "heap_textures", &layout,
 +                              range->comp_type, range->kind);
@@ -202,7 +207,7 @@ index 202d622..4b5ca9c 100644
  static const struct dxil_value *
  create_image_handle(struct ntd_context *ctx, nir_intrinsic_instr *image_intr)
  {
-@@ -3514,6 +3700,12 @@ create_image_handle(struct ntd_context *ctx, nir_intrinsic_instr *image_intr)
+@@ -3514,6 +3705,12 @@ create_image_handle(struct ntd_context *ctx, nir_intrinsic_instr *image_intr)
  static const struct dxil_value *
  create_srv_handle(struct ntd_context *ctx, nir_tex_instr *tex, nir_src *src)
  {
@@ -215,7 +220,7 @@ index 202d622..4b5ca9c 100644
     const struct dxil_value *unannotated_handle =
        emit_createhandle_heap(ctx, get_src(ctx, src, 0, nir_type_uint32), false, true /*TODO: divergence*/);
     const struct dxil_value *res_props =
-@@ -3528,6 +3720,11 @@ create_srv_handle(struct ntd_context *ctx, nir_tex_instr *tex, nir_src *src)
+@@ -3528,6 +3725,11 @@ create_srv_handle(struct ntd_context *ctx, nir_tex_instr *tex, nir_src *src)
  static const struct dxil_value *
  create_sampler_handle(struct ntd_context *ctx, bool is_shadow, nir_src *src)
  {
@@ -227,7 +232,7 @@ index 202d622..4b5ca9c 100644
     const struct dxil_value *unannotated_handle =
        emit_createhandle_heap(ctx, get_src(ctx, src, 0, nir_type_uint32), true, true /*TODO: divergence*/);
     const struct dxil_value *res_props =
-@@ -6216,6 +6413,9 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6216,6 +6418,9 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
      * them below. */
     gather_interlock_rov_resources(ctx);
  
@@ -237,7 +242,7 @@ index 202d622..4b5ca9c 100644
     /* CBVs */
     if (!emit_cbvs(ctx))
        return false;
-@@ -6227,6 +6427,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6227,6 +6432,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
        if (count > 0 && !emit_sampler(ctx, var, count))
           return false;
     }
@@ -246,7 +251,7 @@ index 202d622..4b5ca9c 100644
  
     /* SRVs */
     nir_foreach_variable_with_modes(var, ctx->shader, nir_var_uniform) {
-@@ -6248,6 +6450,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6248,6 +6455,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
           }
        }
     }
@@ -255,7 +260,7 @@ index 202d622..4b5ca9c 100644
  
     if (!emit_shared_vars(ctx))
        return false;
-@@ -6802,6 +7006,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
+@@ -6802,6 +7011,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
     util_dynarray_init(&ctx->sampler_metadata_nodes, ctx->ralloc_ctx);
     util_dynarray_init(&ctx->resources, ctx->ralloc_ctx);
     util_dynarray_init(&ctx->rov_resources, ctx->ralloc_ctx);
@@ -263,7 +268,7 @@ index 202d622..4b5ca9c 100644
     dxil_module_init(&ctx->mod, ctx->ralloc_ctx);
     ctx->mod.shader_kind = get_dxil_shader_kind(s);
     ctx->mod.major_version = 6;
-@@ -6810,6 +7015,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
+@@ -6810,6 +7020,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
        MIN2(opts->shader_model_max & 0xffff, validator_version & 0xffff);
     ctx->mod.major_validator = validator_version >> 16;
     ctx->mod.minor_validator = validator_version & 0xffff;
@@ -272,10 +277,10 @@ index 202d622..4b5ca9c 100644
     if (s->info.stage <= MESA_SHADER_FRAGMENT) {
        uint64_t in_mask =
 diff --git a/src/microsoft/compiler/nir_to_dxil.h b/src/microsoft/compiler/nir_to_dxil.h
-index 9890115..3f6ecfb 100644
+index 9890115..61513a8 100644
 --- a/src/microsoft/compiler/nir_to_dxil.h
 +++ b/src/microsoft/compiler/nir_to_dxil.h
-@@ -87,6 +87,14 @@ struct nir_to_dxil_options {
+@@ -87,6 +87,18 @@ struct nir_to_dxil_options {
     enum dxil_environment environment;
     enum dxil_shader_model shader_model_max;
     enum dxil_validator_version validator_version_max;
@@ -287,36 +292,44 @@ index 9890115..3f6ecfb 100644
 +    * dxil_spirv_runtime_conf::heap_emulation_register_space_base. */
 +   bool heap_emulation;
 +   unsigned heap_emulation_space_base;
++   /* Sizes of the emulation ranges, 0 for unbounded ones. Some drivers handle
++    * ranges of the size of the heap better than unbounded ones. */
++   unsigned heap_emulation_srv_count;
++   unsigned heap_emulation_sampler_count;
  };
  
  typedef void (*dxil_msg_callback)(void *priv, const char *msg);
 diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
-index c525261..7f4ec35 100644
+index c525261..b1cf5f0 100644
 --- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
 +++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.c
-@@ -82,6 +82,8 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
+@@ -82,6 +82,10 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
        .shader_model_max = conf->shader_model_max,
        .validator_version_max = validator_version_max,
        .input_clip_size = conf->input_clip_size,
 +      .heap_emulation = conf->lower_to_bindless,
 +      .heap_emulation_space_base = conf->heap_emulation_register_space_base,
++      .heap_emulation_srv_count = conf->heap_emulation_srv_count,
++      .heap_emulation_sampler_count = conf->heap_emulation_sampler_count,
     };
  
     const struct spirv_to_nir_options *spirv_opts = dxil_spirv_nir_get_spirv_options();
-@@ -165,6 +167,8 @@ spirv_to_dxil_link(const struct dxil_spirv_link_stage *stages, size_t num_stages
+@@ -165,6 +169,10 @@ spirv_to_dxil_link(const struct dxil_spirv_link_stage *stages, size_t num_stages
        .shader_model_max = conf->shader_model_max,
        .validator_version_max = validator_version_max,
        .input_clip_size = conf->input_clip_size,
 +      .heap_emulation = conf->lower_to_bindless,
 +      .heap_emulation_space_base = conf->heap_emulation_register_space_base,
++      .heap_emulation_srv_count = conf->heap_emulation_srv_count,
++      .heap_emulation_sampler_count = conf->heap_emulation_sampler_count,
     };
  
     const struct spirv_to_nir_options *spirv_opts =
 diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
-index 9285436..08877a5 100644
+index 9285436..6290b15 100644
 --- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
 +++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
-@@ -219,8 +219,31 @@ struct dxil_spirv_runtime_conf {
+@@ -219,8 +219,35 @@ struct dxil_spirv_runtime_conf {
     unsigned input_clip_size;
  
     bool disable_math_refactoring;
@@ -329,6 +342,10 @@ index 9285436..08877a5 100644
 +   // dxil_spirv_heap_emulation_sampler_space for this base. The descriptor
 +   // tables binding them must point to the start of the heaps.
 +   uint32_t heap_emulation_register_space_base;
++   // The number of descriptors in each emulation range, 0 for unbounded
++   // ranges. The descriptor tables must declare the same sizes.
++   uint32_t heap_emulation_srv_count;
++   uint32_t heap_emulation_sampler_count;
  };
  
 +static inline uint32_t
