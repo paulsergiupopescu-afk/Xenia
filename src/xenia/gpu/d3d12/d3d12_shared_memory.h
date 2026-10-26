@@ -167,9 +167,11 @@ class D3D12SharedMemory : public SharedMemory {
   // null and the device-local path is used unchanged).
   void TryInitializeHostBuffer();
   // Maps a dedicated guest RAM view and opens it as a D3D12 heap
-  // (OpenExistingHeapFromAddress). Returns true with out_view/out_heap set;
-  // false with nothing to clean up.
-  bool ImportGuestRamHeap(void*& out_view, ID3D12Heap*& out_heap);
+  // (OpenExistingHeapFromAddress). Returns true with out_view/out_heap set and
+  // out_heap_offset being where guest physical RAM starts in the heap; false
+  // with nothing to clean up.
+  bool ImportGuestRamHeap(void*& out_view, ID3D12Heap*& out_heap,
+                          uint64_t& out_heap_offset);
   // Places buffer_ directly on a heap imported from guest RAM (full zero-copy).
   // Returns true (buffer_/zero_copy_ set) or false to use the device-local
   // path.

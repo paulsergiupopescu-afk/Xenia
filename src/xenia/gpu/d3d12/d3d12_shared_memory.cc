@@ -135,8 +135,22 @@ bool D3D12SharedMemory::Initialize() {
   return true;
 }
 
+#if XE_PLATFORM_WINUWP
+static ID3D12Heap* OpenHeapFromAddress(ID3D12Device3* device3, void* address,
+                                       const char* what) {
+  ID3D12Heap* heap = nullptr;
+  HRESULT hr =
+      device3->OpenExistingHeapFromAddress(address, IID_PPV_ARGS(&heap));
+  XELOGI("Shared memory host import: OpenExistingHeapFromAddress of {}: 0x{:08X}",
+         what, static_cast<uint32_t>(hr));
+  return SUCCEEDED(hr) ? heap : nullptr;
+}
+#endif  // XE_PLATFORM_WINUWP
+
 bool D3D12SharedMemory::ImportGuestRamHeap(void*& out_view,
-                                           ID3D12Heap*& out_heap) {
+                                           ID3D12Heap*& out_heap,
+                                           uint64_t& out_heap_offset) {
+  out_heap_offset = 0;
   const ui::d3d12::D3D12Provider& provider =
       command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
@@ -165,6 +179,71 @@ bool D3D12SharedMemory::ImportGuestRamHeap(void*& out_view,
   // backing) while isolating protection (per-view PTEs).
   const size_t physical_offset =
       size_t(memory().physical_membase() - memory().virtual_membase());
+#if XE_PLATFORM_WINUWP
+  // On the Xbox, D3D12 rejects the placeholder-backed views that MapFileView
+  // creates for app containers with E_INVALIDARG, which leaves memexport
+  // without a host buffer (Need for Speed: The Run then crashes on its first
+  // story load). Try the other ways of importing the same pages, in order.
+  {
+    ID3D12Heap* heap = nullptr;
+    // A plain view, like MapViewOfFileEx creates on the desktop.
+    void* plain_view =
+        MapViewOfFileFromApp(memory().mapping_handle(),
+                             FILE_MAP_READ | FILE_MAP_WRITE,
+                             ULONG64(physical_offset), kBufferSize);
+    if (plain_view) {
+      heap = OpenHeapFromAddress(device3, plain_view, "a plain view");
+      if (!heap) {
+        // The guest RAM mapping is reserved, not committed (SEC_RESERVE).
+        // Committing through this view commits the shared pages, which the
+        // memory-managed views would commit on use anyway.
+        if (VirtualAllocFromApp(plain_view, kBufferSize, MEM_COMMIT,
+                                PAGE_READWRITE)) {
+          heap = OpenHeapFromAddress(device3, plain_view,
+                                     "a committed plain view");
+        } else {
+          XELOGI("Shared memory host import: committing the view failed ({})",
+                 GetLastError());
+        }
+      }
+    } else {
+      XELOGI("Shared memory host import: MapViewOfFileFromApp failed ({})",
+             GetLastError());
+    }
+    if (!heap) {
+      // The whole guest memory mapping, with physical RAM at its offset.
+      HRESULT hr = device3->OpenExistingHeapFromFileMapping(
+          memory().mapping_handle(), IID_PPV_ARGS(&heap));
+      XELOGI(
+          "Shared memory host import: OpenExistingHeapFromFileMapping: "
+          "0x{:08X}",
+          static_cast<uint32_t>(hr));
+      if (SUCCEEDED(hr)) {
+        out_heap_offset = physical_offset;
+      } else {
+        heap = nullptr;
+      }
+    }
+    if (heap) {
+      device3->Release();
+      const D3D12_HEAP_DESC heap_desc = heap->GetDesc();
+      XELOGI(
+          "Shared memory host import: heap size 0x{:X} CPUPageProperty={} "
+          "MemoryPool={} flags=0x{:X}",
+          heap_desc.SizeInBytes,
+          uint32_t(heap_desc.Properties.CPUPageProperty),
+          uint32_t(heap_desc.Properties.MemoryPoolPreference),
+          uint32_t(heap_desc.Flags));
+      out_view = plain_view;
+      out_heap = heap;
+      return true;
+    }
+    // Fall back to the desktop way below, for its log.
+    if (plain_view) {
+      UnmapViewOfFile(plain_view);
+    }
+  }
+#endif  // XE_PLATFORM_WINUWP
   void* view = xe::memory::MapFileView(
       memory().mapping_handle(), nullptr, kBufferSize,
       xe::memory::PageAccess::kReadWrite, physical_offset);
@@ -212,7 +291,8 @@ void D3D12SharedMemory::TryInitializeHostBuffer() {
   }
   void* view = nullptr;
   ID3D12Heap* heap = nullptr;
-  if (!ImportGuestRamHeap(view, heap)) {
+  uint64_t heap_offset = 0;
+  if (!ImportGuestRamHeap(view, heap, heap_offset)) {
     // Without it memexport output stays device-local and the CPU never sees it.
     XELOGW(
         "Shared memory: no host buffer for memexport - memexport_enable is set "
@@ -234,7 +314,8 @@ void D3D12SharedMemory::TryInitializeHostBuffer() {
           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
   host_buffer_state_ = D3D12_RESOURCE_STATE_COMMON;
   HRESULT hr =
-      device->CreatePlacedResource(heap, 0, &buffer_desc, host_buffer_state_,
+      device->CreatePlacedResource(heap, heap_offset, &buffer_desc,
+                                   host_buffer_state_,
                                    nullptr, IID_PPV_ARGS(&host_buffer_));
   if (FAILED(hr)) {
     XELOGI("Shared memory host import: UAV buffer placement failed (0x{:08X})",
@@ -254,7 +335,8 @@ void D3D12SharedMemory::TryInitializeHostBuffer() {
 bool D3D12SharedMemory::TryInitializeZeroCopy() {
   void* view = nullptr;
   ID3D12Heap* heap = nullptr;
-  if (!ImportGuestRamHeap(view, heap)) {
+  uint64_t heap_offset = 0;
+  if (!ImportGuestRamHeap(view, heap, heap_offset)) {
     return false;
   }
 
@@ -271,8 +353,9 @@ bool D3D12SharedMemory::TryInitializeZeroCopy() {
       D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER |
           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
   buffer_state_ = D3D12_RESOURCE_STATE_COMMON;
-  HRESULT hr = device->CreatePlacedResource(
-      heap, 0, &buffer_desc, buffer_state_, nullptr, IID_PPV_ARGS(&buffer_));
+  HRESULT hr = device->CreatePlacedResource(heap, heap_offset, &buffer_desc,
+                                            buffer_state_, nullptr,
+                                            IID_PPV_ARGS(&buffer_));
   if (FAILED(hr)) {
     XELOGI("Shared memory zero-copy: buffer placement failed (0x{:08X})",
            static_cast<uint32_t>(hr));
