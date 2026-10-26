@@ -82,6 +82,19 @@ option(XENIA_ENABLE_PROFILER "Enable profiler (UI is Debug-only)" OFF)
 option(XENIA_ENABLE_ITRACE "Enable JIT per-instruction tracing to the log (slow)" OFF)
 option(XENIA_ENABLE_DTRACE "Enable JIT per-operation data tracing to the log (very slow)" OFF)
 option(XENIA_ENABLE_FTRACE "Enable JIT per-function-call tracing to the log" OFF)
+option(XENIA_UWP "Build the UWP app for Xbox Series X|S Developer Mode instead of the desktop app" OFF)
+
+if(XENIA_UWP)
+  if(NOT WIN32 OR NOT XE_TARGET_X86_64)
+    message(FATAL_ERROR "XENIA_UWP requires an x86_64 Windows build")
+  endif()
+  # Libraries are compiled against the desktop headers, like the earlier
+  # Xenia UWP ports, and only the final app is linked as an app container
+  # against WindowsApp.lib, so any desktop-only API still in use shows up as
+  # an unresolved external rather than as a crash on the console.
+  add_compile_definitions(XE_PLATFORM_WINUWP=1)
+  set(XENIA_ENABLE_LTO OFF CACHE BOOL "" FORCE)
+endif()
 
 if(XENIA_ENABLE_PROFILER)
   # UI is Debug-only — shutdown dump spams the log otherwise.

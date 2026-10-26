@@ -712,7 +712,7 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
                         disable_lto=False, enable_profiler=False,
                         enable_itrace=False, enable_dtrace=False,
                         enable_ftrace=False,
-                        target_arch=None, config=None):
+                        target_arch=None, config=None, uwp=False):
     """Runs `cmake` to (re)configure build/ from the source root.
 
     Uses Ninja Multi-Config by default on all platforms. On Linux the
@@ -816,6 +816,7 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     args += [f"-DXENIA_ENABLE_ITRACE={'ON' if enable_itrace else 'OFF'}"]
     args += [f"-DXENIA_ENABLE_DTRACE={'ON' if enable_dtrace else 'OFF'}"]
     args += [f"-DXENIA_ENABLE_FTRACE={'ON' if enable_ftrace else 'OFF'}"]
+    args += [f"-DXENIA_UWP={'ON' if uwp else 'OFF'}"]
     if config:
         args += [f"-DCMAKE_BUILD_TYPE={config.title()}"]
     ret = subprocess.call(args)
@@ -1073,6 +1074,11 @@ class BaseBuildCommand(Command):
             help="Enables JIT per-function-call tracing to the log (sets "
                  "-DXENIA_ENABLE_FTRACE=ON). For debugging only.")
         self.parser.add_argument(
+            "--uwp", action="store_true", default=False,
+            help="Configures the UWP app for Xbox Series X|S Developer Mode "
+                 "(sets -DXENIA_UWP=ON, build the xenia-uwp target). Windows "
+                 "x64 only.")
+        self.parser.add_argument(
             "--target-arch", type=normalize_target_arch, default=None,
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
                  "On Windows and macOS, non-native values enable cross-compilation "
@@ -1092,6 +1098,7 @@ class BaseBuildCommand(Command):
                 enable_ftrace=args["enable_ftrace"],
                 target_arch=target_arch,
                 config=args["config"],
+                uwp=args["uwp"],
             )
             if ret:
                 return ret

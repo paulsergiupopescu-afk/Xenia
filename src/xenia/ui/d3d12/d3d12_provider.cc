@@ -19,7 +19,9 @@
 #include "xenia/ui/d3d12/d3d12_immediate_drawer.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
+#if !XE_PLATFORM_WINUWP
 #include "xenia/ui/redist_installer_wx.h"
+#endif  // !XE_PLATFORM_WINUWP
 DEFINE_bool(d3d12_debug, false, "Enable Direct3D 12 and DXGI debug layer.",
             "D3D12");
 DEFINE_bool(d3d12_gpu_validation, false,
@@ -282,7 +284,10 @@ bool D3D12Provider::Initialize() {
   auto d3d12_dir = xe::filesystem::GetExecutablePath().parent_path() / "D3D12";
   pfn_dxcompiler_dxc_create_instance_ = nullptr;
   {
+#if !XE_PLATFORM_WINUWP
+    // The UWP package ships the runtime in D3D12/, nothing can be downloaded.
     EnsureShaderCompilerRuntime(d3d12_dir);
+#endif  // !XE_PLATFORM_WINUWP
 
     // Pre-load dxil.dll by full path so dxcompiler's later plain-name load of
     // it resolves here. That search skips D3D12/, so without this the DXIL
@@ -323,6 +328,9 @@ bool D3D12Provider::Initialize() {
 
   // The D3D12SDKVersion exports make d3d12.dll load D3D12Core.dll at the first
   // device creation, which fails outright if it's missing, so fetch it first.
+  // The Xbox has no Agility SDK support, the UWP app uses the system runtime
+  // and doesn't export D3D12SDKVersion.
+#if !XE_PLATFORM_WINUWP
   std::error_code ec;
   if (!std::filesystem::exists(d3d12_dir / "D3D12Core.dll", ec)) {
     // Returns only on decline or failure. On success it restarts.
@@ -334,6 +342,7 @@ bool D3D12Provider::Initialize() {
       return false;
     }
   }
+#endif  // !XE_PLATFORM_WINUWP
 
   // Configure the DXGI debug info queue.
   if (cvars::d3d12_break_on_error || cvars::d3d12_break_on_warning) {
@@ -377,9 +386,11 @@ bool D3D12Provider::Initialize() {
       XELOGI("Direct3D 12 debug layer enabled{}",
              gpu_validation ? " with GPU-based validation" : "");
     } else {
+#if !XE_PLATFORM_WINUWP
       // The debug layer (D3D12SDKLayers.dll) isn't redistributable on its own.
       // Offer to fetch it from the Agility SDK and restart.
       EnsureDebugLayer(d3d12_dir);
+#endif  // !XE_PLATFORM_WINUWP
       XELOGW("Failed to enable the Direct3D 12 debug layer");
       debug = false;
     }
@@ -486,6 +497,16 @@ bool D3D12Provider::Initialize() {
         SUCCEEDED(device->CheckFeatureSupport(
             D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model))) &&
         shader_model.HighestShaderModel >= D3D_SHADER_MODEL_6_6;
+#if XE_PLATFORM_WINUWP
+    // UWP on the Xbox Series X|S tops out at Shader Model 6.4 and can't get a
+    // newer runtime. Keep going so the pipeline cache can pick the guest
+    // shader path that works without dynamic resource heap indexing.
+    if (!shader_model_6_6_supported) {
+      XELOGW(
+          "Direct3D 12: Shader Model 6.6 isn't available, using the Shader "
+          "Model 6.0+ guest shader path");
+    }
+#else
     if (!shader_model_6_6_supported) {
       device->Release();
       dxgi_factory->Release();
@@ -494,6 +515,7 @@ bool D3D12Provider::Initialize() {
           "shaders");
       return false;
     }
+#endif  // XE_PLATFORM_WINUWP
   }
 
   // Configure the Direct3D 12 debug info queue.

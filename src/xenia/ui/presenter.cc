@@ -1227,6 +1227,8 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
   // of `window_`.
 #if XE_PLATFORM_WIN32
   HMONITOR surface_new_win32_monitor = nullptr;
+#if !XE_PLATFORM_WINUWP
+  // There are no HWNDs or monitor handles for a CoreWindow.
   if (surface_) {
     HWND hwnd = nullptr;
     if (surface_->GetType() == Surface::kTypeIndex_Win32Hwnd) {
@@ -1239,6 +1241,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
           MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
     }
   }
+#endif  // !XE_PLATFORM_WINUWP
   if (old_monitor_potentially_disconnected ||
       surface_win32_monitor_ != surface_new_win32_monitor) {
     surface_win32_monitor_ = surface_new_win32_monitor;

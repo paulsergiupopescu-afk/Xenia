@@ -67,6 +67,9 @@ Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
   types |= Surface::kTypeFlag_Win32Hwnd;
 #endif
+#if XE_PLATFORM_WINUWP
+  types |= Surface::kTypeFlag_UWPCoreWindow;
+#endif
   return types;
 }
 
@@ -325,6 +328,22 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
                                             DXGI_MWA_NO_ALT_ENTER);
       } break;
 #endif
+#if XE_PLATFORM_WINUWP
+      case Surface::kTypeIndex_UWPCoreWindow: {
+        // CoreWindow swap chains don't support DXGI_SCALING_NONE.
+        swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
+        if (FAILED(dxgi_factory->CreateSwapChainForCoreWindow(
+                direct_queue,
+                static_cast<const UWPCoreWindowSurface&>(new_surface)
+                    .core_window(),
+                &swap_chain_desc, nullptr, &swap_chain_1))) {
+          XELOGE(
+              "D3D12Presenter: Failed to create a swap chain for the "
+              "CoreWindow");
+          return SurfacePaintConnectResult::kFailure;
+        }
+      } break;
+#endif  // XE_PLATFORM_WINUWP
       default:
         assert_unhandled_case(surface_type);
         XELOGE(

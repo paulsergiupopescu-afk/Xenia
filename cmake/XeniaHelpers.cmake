@@ -3,7 +3,7 @@
 include(CMakeParseArguments)
 
 set(XE_PLATFORM_SUFFIXES
-  _win _linux _posix _gnulinux _x11 _gtk _android _mac _amd64 _x64 _arm64
+  _win _uwp _linux _posix _gnulinux _x11 _gtk _android _mac _amd64 _x64 _arm64
 )
 
 # xe_platform_sources(target base_path [RECURSIVE])
@@ -55,6 +55,13 @@ function(xe_platform_sources target base_path)
       "${base_path}/*_win.h"
       "${base_path}/*_win.cc"
     )
+    if(XENIA_UWP)
+      file(${glob_mode} _uwp_sources
+        "${base_path}/*_uwp.h"
+        "${base_path}/*_uwp.cc"
+      )
+      list(APPEND _plat_sources ${_uwp_sources})
+    endif()
   elseif(APPLE)
     file(${glob_mode} _plat_sources
       "${base_path}/*_posix.h"

@@ -19,6 +19,10 @@
 #include "xenia/base/platform_win.h"
 #include "xenia/base/string.h"
 
+#if XE_PLATFORM_WINUWP
+#include "xenia/base/platform_uwp.h"
+#endif  // XE_PLATFORM_WINUWP
+
 namespace xe {
 
 std::string path_to_utf8(const std::filesystem::path& path) {
@@ -50,6 +54,10 @@ std::filesystem::path GetExecutableFolder() {
 }
 
 std::filesystem::path GetUserFolder() {
+#if XE_PLATFORM_WINUWP
+  // Documents isn't accessible to the app container, use the app's own folder.
+  return xe::uwp::GetLocalStateFolder();
+#else
   std::filesystem::path result;
   PWSTR path;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT,
@@ -58,6 +66,7 @@ std::filesystem::path GetUserFolder() {
     CoTaskMemFree(path);
   }
   return result;
+#endif  // XE_PLATFORM_WINUWP
 }
 
 bool CreateEmptyFile(const std::filesystem::path& path) {

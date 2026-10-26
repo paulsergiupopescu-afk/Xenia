@@ -1,0 +1,105 @@
+# Builds and packages the UWP app for Xbox Series X|S Developer Mode.
+name: UWP
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build UWP (x64)
+    runs-on: windows-2022
+    env:
+      POWERSHELL_TELEMETRY_OPTOUT: 1
+      # Keep in sync with kShaderCompilerRuntimeUrl in
+      # src/xenia/ui/redist_installer_wx.cc.
+      DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Cache Slang
+        id: cache-slang
+        uses: actions/cache@v5
+        with:
+          path: .slang
+          # Keep in sync with SLANG_VERSION in xenia-build.py.
+          key: ${{ runner.os }}-${{ runner.arch }}-slang-2026.8
+
+      - name: Download Slang
+        if: steps.cache-slang.outputs.cache-hit != 'true'
+        run: python xenia-build.py slang
+
+      - name: Disable Defender scanning for build paths
+        run: |
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
+        shell: pwsh
+
+      - name: Fetch submodules and data
+        run: |
+          # wxWidgets isn't used by the UWP app.
+          $submodules = (Select-String -CaseSensitive '(?<=path = ).+' .gitmodules).Matches.Value |
+            Where-Object { $_ -ne 'third_party/wxWidgets' }
+          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS $submodules
+          python xenia-build.py fetchdata
+
+      - name: Install Meson for spirv_to_dxil
+        run: python -m pip install --upgrade meson mako pyyaml
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: python xenia-build.py build --config=Release --uwp --target=xenia-uwp
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Imported DLLs
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = 'build\bin\Windows\Release\xenia_edge_uwp.exe'
+          if (Test-Path $exe) {
+            $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+              Select-Object -Last 1
+            & $dumpbin.FullName /nologo /dependents $exe
+          }
+
+      - name: Download the DirectX Shader Compiler
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:DXC_URL -OutFile "$env:RUNNER_TEMP\dxc.zip"
+          Expand-Archive "$env:RUNNER_TEMP\dxc.zip" -DestinationPath "$env:RUNNER_TEMP\dxc"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          tools\uwp\package.ps1 `
+            -BinDir build\bin\Windows\Release `
+            -DxcDir "$env:RUNNER_TEMP\dxc\bin\x64" `
+            -OutDir artifacts\XeniaEdge-UWP `
+            -Version "1.0.${{ github.run_number }}.0"
+          Copy-Item tools\uwp\INSTALL.md artifacts\XeniaEdge-UWP\
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: XeniaEdge-UWP-x64
+          path: artifacts\XeniaEdge-UWP
+          if-no-files-found: error

@@ -39,6 +39,24 @@ class Win32HwndSurface final : public Surface {
 };
 #endif
 
+#if XE_PLATFORM_WINUWP
+// The CoreWindow of the app's view, held as its ABI IUnknown so this header
+// doesn't depend on C++/WinRT.
+class UWPCoreWindowSurface final : public Surface {
+ public:
+  explicit UWPCoreWindowSurface(IUnknown* core_window);
+  ~UWPCoreWindowSurface() override;
+  TypeIndex GetType() const override { return kTypeIndex_UWPCoreWindow; }
+  IUnknown* core_window() const { return core_window_; }
+
+ protected:
+  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override;
+
+ private:
+  IUnknown* core_window_;
+};
+#endif  // XE_PLATFORM_WINUWP
+
 }  // namespace ui
 }  // namespace xe
 

@@ -126,11 +126,18 @@ bool PipelineCache::Initialize() {
   // DXIL, so the D3D12 backend can't run without DXC.
   dxc_shader_compiler_ = std::make_unique<DxcCompiler>(provider);
   if (!dxc_shader_compiler_->Initialize()) {
+#if XE_PLATFORM_WINUWP
+    // Nothing is compiled from HLSL at runtime, the guest shaders go through
+    // spirv_to_dxil, which only needs dxil.dll for signing.
+    XELOGW("DXC shader compiler unavailable, continuing without it");
+    dxc_shader_compiler_.reset();
+#else
     XELOGE(
         "Failed to initialize the DXC shader compiler. Place a recent "
         "dxcompiler.dll next to the executable.");
     dxc_shader_compiler_.reset();
     return false;
+#endif  // XE_PLATFORM_WINUWP
   }
   // SPIR-V translator for the spirv_to_dxil guest path, FSI-aware (matches the
   // render target cache path, set in CreateTranslator).
