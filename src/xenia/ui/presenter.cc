@@ -1227,8 +1227,22 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
   // of `window_`.
 #if XE_PLATFORM_WIN32
   HMONITOR surface_new_win32_monitor = nullptr;
-#if !XE_PLATFORM_WINUWP
-  // There are no HWNDs or monitor handles for a CoreWindow.
+#if XE_PLATFORM_WINUWP
+  // There's no HWND for a CoreWindow, which is always on the main display, so
+  // take the monitor of the first DXGI output, for the UI ticks.
+  if (surface_) {
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<IDXGIOutput> output;
+    DXGI_OUTPUT_DESC output_desc;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->EnumAdapters(0, &adapter)) &&
+        SUCCEEDED(adapter->EnumOutputs(0, &output)) &&
+        SUCCEEDED(output->GetDesc(&output_desc))) {
+      surface_new_win32_monitor = output_desc.Monitor;
+    }
+  }
+#else
   if (surface_) {
     HWND hwnd = nullptr;
     if (surface_->GetType() == Surface::kTypeIndex_Win32Hwnd) {
@@ -1241,7 +1255,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
           MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
     }
   }
-#endif  // !XE_PLATFORM_WINUWP
+#endif  // XE_PLATFORM_WINUWP
   if (old_monitor_potentially_disconnected ||
       surface_win32_monitor_ != surface_new_win32_monitor) {
     surface_win32_monitor_ = surface_new_win32_monitor;
@@ -1290,7 +1304,11 @@ bool Presenter::InSurfaceOnMonitorFromUIThread() const {
   if (!surface_) {
     return false;
   }
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WINUWP
+  // A CoreWindow is always on a display, even if no DXGI output is exposed for
+  // it (then the UI just isn't paced by vertical blanks).
+  return true;
+#elif XE_PLATFORM_WIN32
   return surface_win32_monitor_ != nullptr;
 #else
   return true;
