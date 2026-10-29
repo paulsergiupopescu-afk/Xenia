@@ -509,6 +509,17 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // Need to await submission completion before calling.
   void ClearCommandAllocatorCache();
 
+  // Memexport readback, for when guest RAM can't be imported as a GPU buffer
+  // (the Xbox), so the output would otherwise never reach the CPU. Whether it's
+  // used for the current draws.
+  bool IsMemexportReadbackUsed() const;
+  // Copies memexport_ranges_ from the shared memory buffer to readback memory,
+  // before the exporting draw (!after) or after it. Call with after only if the
+  // call before the draw has succeeded.
+  bool CopyMemexportRangesForReadback(bool after);
+  // Writes the output of the draws in the completed submissions to guest RAM.
+  void ApplyMemexportReadbacks(uint64_t completed_submission);
+
   // Request descriptors and automatically rebind the descriptor heap on the
   // draw command list. Refer to D3D12DescriptorHeapPool::Request for partial /
   // full update explanation. Doesn't work when bindless descriptors are used.
@@ -811,6 +822,25 @@ class D3D12CommandProcessor final : public CommandProcessor {
   uint32_t scratch_buffer_size_ = 0;
   D3D12_RESOURCE_STATES scratch_buffer_state_;
   bool scratch_buffer_used_ = false;
+
+  // Memexport readback. Each exporting draw gets a readback buffer holding its
+  // ranges before the draw, then after it. Only the bytes the draw changed are
+  // written to guest RAM, since the declared ranges are often much larger than
+  // what's exported, and copying all of them back would overwrite what the CPU
+  // has written there since (Need for Speed: The Run then crashes calling a
+  // null callback at the first story briefing).
+  struct MemexportReadback {
+    uint64_t submission;
+    ID3D12Resource* buffer;
+    uint32_t buffer_size;
+    // Offset of the "after" copies in the buffer.
+    uint32_t after_offset;
+    // Ranges, in the order of the copies in both halves.
+    std::vector<draw_util::MemExportRange> ranges;
+  };
+  std::deque<MemexportReadback> memexport_readbacks_;
+  // Free readback buffers, <size, buffer>.
+  std::vector<std::pair<uint32_t, ID3D12Resource*>> memexport_readback_pool_;
 
   // Two-buffer memexport page tracking (data + methods), shared with the Vulkan
   // backend as a class-body fragment so each backend gets its own non-virtual,

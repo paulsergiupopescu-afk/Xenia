@@ -44,10 +44,20 @@ DEFINE_bool(d3d12_bindless, true,
             "Use bindless resources where available - may improve performance, "
             "but may make debugging more complicated.",
             "D3D12");
+DEFINE_bool(d3d12_memexport_readback, true,
+            "When guest RAM can't be imported as a GPU buffer (on the Xbox), "
+            "copy the bytes memory export draws change back to guest RAM, by "
+            "the time the guest waits for the GPU. Needs memexport_enable.",
+            "D3D12");
+DEFINE_bool(d3d12_memexport_readback_sync, false,
+            "Await each memory export readback right after its draw rather "
+            "than when the guest waits for the GPU. Much slower.",
+            "D3D12");
 
 DECLARE_bool(clear_memory_page_state);
 DECLARE_bool(d3d12_debug);
 DECLARE_bool(gpu_debug_markers);
+DECLARE_bool(memexport_enable);
 DECLARE_bool(submit_on_primary_buffer_end);
 
 namespace xe {
@@ -1704,6 +1714,17 @@ void D3D12CommandProcessor::ShutdownContext() {
   ui::d3d12::util::ReleaseAndNull(scratch_buffer_);
   scratch_buffer_size_ = 0;
 
+  // Normally applied and returned to the pool by the await above.
+  for (const MemexportReadback& memexport_readback : memexport_readbacks_) {
+    memexport_readback.buffer->Release();
+  }
+  memexport_readbacks_.clear();
+  for (const std::pair<uint32_t, ID3D12Resource*>& pool_buffer :
+       memexport_readback_pool_) {
+    pool_buffer.second->Release();
+  }
+  memexport_readback_pool_.clear();
+
   for (const std::pair<uint64_t, ID3D12Resource*>& resource_for_deletion :
        resources_for_deletion_) {
     resource_for_deletion.second->Release();
@@ -2646,6 +2667,130 @@ bool D3D12CommandProcessor::EnsureMemexportRangeInDeviceBuffer(
   return true;
 }
 
+bool D3D12CommandProcessor::IsMemexportReadbackUsed() const {
+  return cvars::memexport_enable && cvars::d3d12_memexport_readback &&
+         !shared_memory_->is_zero_copy() &&
+         shared_memory_->GetHostBuffer() == nullptr;
+}
+
+bool D3D12CommandProcessor::CopyMemexportRangesForReadback(bool after) {
+  uint32_t ranges_size = 0;
+  for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
+    ranges_size += memexport_range.size_bytes;
+  }
+  if (!ranges_size) {
+    return false;
+  }
+  ID3D12Resource* buffer;
+  uint32_t buffer_offset;
+  if (after) {
+    MemexportReadback& readback = memexport_readbacks_.back();
+    buffer = readback.buffer;
+    buffer_offset = readback.after_offset;
+  } else {
+    // Take the smallest free buffer fitting both halves.
+    uint32_t buffer_size = ranges_size * 2;
+    auto pool_best = memexport_readback_pool_.end();
+    for (auto pool_it = memexport_readback_pool_.begin();
+         pool_it != memexport_readback_pool_.end(); ++pool_it) {
+      if (pool_it->first >= buffer_size &&
+          (pool_best == memexport_readback_pool_.end() ||
+           pool_it->first < pool_best->first)) {
+        pool_best = pool_it;
+      }
+    }
+    if (pool_best != memexport_readback_pool_.end()) {
+      buffer_size = pool_best->first;
+      buffer = pool_best->second;
+      memexport_readback_pool_.erase(pool_best);
+    } else {
+      buffer_size = xe::align(buffer_size, uint32_t(1) << 16);
+      D3D12_RESOURCE_DESC buffer_desc;
+      ui::d3d12::util::FillBufferResourceDesc(buffer_desc, buffer_size,
+                                              D3D12_RESOURCE_FLAG_NONE);
+      const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+      if (FAILED(provider.GetDevice()->CreateCommittedResource(
+              &ui::d3d12::util::kHeapPropertiesReadback,
+              provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
+              D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+              IID_PPV_ARGS(&buffer)))) {
+        XELOGE("Failed to create a {} KB memexport readback buffer",
+               buffer_size >> 10);
+        return false;
+      }
+    }
+    MemexportReadback& readback = memexport_readbacks_.emplace_back();
+    readback.submission = GetCurrentSubmission();
+    readback.buffer = buffer;
+    readback.buffer_size = buffer_size;
+    readback.after_offset = ranges_size;
+    readback.ranges = memexport_ranges_;
+    buffer_offset = 0;
+  }
+  shared_memory_->UseAsCopySource();
+  SubmitBarriers();
+  ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
+  for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
+    deferred_command_list_.D3DCopyBufferRegion(
+        buffer, buffer_offset, shared_memory_buffer,
+        memexport_range.base_address_dwords << 2, memexport_range.size_bytes);
+    buffer_offset += memexport_range.size_bytes;
+  }
+  return true;
+}
+
+void D3D12CommandProcessor::ApplyMemexportReadbacks(
+    uint64_t completed_submission) {
+  while (!memexport_readbacks_.empty()) {
+    MemexportReadback& readback = memexport_readbacks_.front();
+    if (readback.submission > completed_submission) {
+      break;
+    }
+    D3D12_RANGE read_range;
+    read_range.Begin = 0;
+    read_range.End = SIZE_T(readback.after_offset) * 2;
+    void* mapping;
+    if (SUCCEEDED(readback.buffer->Map(0, &read_range, &mapping))) {
+      const uint8_t* before = reinterpret_cast<const uint8_t*>(mapping);
+      const uint8_t* after = before + readback.after_offset;
+      for (const draw_util::MemExportRange& range : readback.ranges) {
+        uint8_t* guest = memory_->TranslatePhysical<uint8_t*>(
+            range.base_address_dwords << 2);
+        // Skip unchanged 8-byte blocks, then compare per byte, since exports of
+        // 8 and 16 bit formats give ranges that aren't a multiple of 4 bytes.
+        uint32_t i = 0;
+        for (; i + 8 <= range.size_bytes; i += 8) {
+          uint64_t before_block, after_block;
+          std::memcpy(&before_block, before + i, sizeof(uint64_t));
+          std::memcpy(&after_block, after + i, sizeof(uint64_t));
+          if (before_block == after_block) {
+            continue;
+          }
+          for (uint32_t j = i; j < i + 8; ++j) {
+            if (after[j] != before[j]) {
+              guest[j] = after[j];
+            }
+          }
+        }
+        for (; i < range.size_bytes; ++i) {
+          if (after[i] != before[i]) {
+            guest[i] = after[i];
+          }
+        }
+        before += range.size_bytes;
+        after += range.size_bytes;
+      }
+      D3D12_RANGE written_range = {};
+      readback.buffer->Unmap(0, &written_range);
+    } else {
+      XELOGE("Failed to map a memexport readback buffer");
+    }
+    memexport_readback_pool_.emplace_back(readback.buffer_size,
+                                          readback.buffer);
+    memexport_readbacks_.pop_front();
+  }
+}
+
 bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
                                       IndexBufferInfo* index_buffer_info,
@@ -3089,6 +3234,11 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       }
     }
   }
+  // Without the host buffer, the output stays in the device buffer, so read it
+  // back, from a snapshot taken right before the draw.
+  const bool memexport_readback = memexport_used && !route_to_host &&
+                                  IsMemexportReadbackUsed() &&
+                                  CopyMemexportRangesForReadback(false);
   // Primitive topology.
   D3D_PRIMITIVE_TOPOLOGY primitive_topology;
   if (primitive_processing_result.IsTessellated()) {
@@ -3270,6 +3420,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
            memexport_ranges_) {
         MarkMemexportPagesWritten(memexport_range.base_address_dwords << 2,
                                   memexport_range.size_bytes);
+      }
+    } else if (memexport_readback) {
+      CopyMemexportRangesForReadback(true);
+      // The readback is written to guest RAM when the submission completes.
+      // Marking the pages makes the fences and the waits the guest observes
+      // await that (consumer routing needs the host buffer, so it's
+      // unaffected).
+      for (const draw_util::MemExportRange& memexport_range :
+           memexport_ranges_) {
+        MarkMemexportPagesWritten(memexport_range.base_address_dwords << 2,
+                                  memexport_range.size_bytes);
+      }
+      if (cvars::d3d12_memexport_readback_sync) {
+        AwaitAllQueueOperationsCompletion();
       }
     }
   }
@@ -3659,6 +3823,8 @@ void D3D12CommandProcessor::CheckSubmissionCompletion(
   completion_timeline_->AwaitSubmissionAndUpdateCompleted(await_submission);
 
   const uint64_t completed_submission = GetCompletedSubmission();
+
+  ApplyMemexportReadbacks(completed_submission);
 
   // Reclaim command allocators.
   while (command_allocator_submitted_first_) {

@@ -889,6 +889,17 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
     }
     matched = MatchValueAndRef(value & mask, ref, wait_info);
 
+    if (!matched && is_memory && cvars::memexport_await_fences) {
+      // The value may be export output that hasn't reached guest RAM yet (Need
+      // for Speed: The Run waits for a flag a shader exports before its first
+      // story briefing).
+      COMMAND_PROCESSOR::AwaitMemexportForCoherency(
+          poll_reg_addr & 0x1FFFFFFC, sizeof(uint32_t));
+      value = xenos::GpuSwap(uint32_t(value_ref),
+                             static_cast<xenos::Endian>(poll_reg_addr & 0x3));
+      matched = MatchValueAndRef(value & mask, ref, wait_info);
+    }
+
     if (!matched) {
       // Wait using the duration specified by the guest.
       if (wait >= 0x100) {
